@@ -1,0 +1,56 @@
+name: 'Automated Release Strategy'
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-push:
+    name: 'Build and Sync to ACR'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v3
+
+    - name: Azure CLI Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: ACR Login
+      run: az acr login --name acrarnprod
+
+    - name: Build Backend Image
+      run: |
+        docker build -t acrarnprod.azurecr.io/devopstrio/arn-backend:${{ github.ref_name }} ./backend
+        docker push acrarnprod.azurecr.io/devopstrio/arn-backend:${{ github.ref_name }}
+
+    - name: Build Portal Image
+      run: |
+        docker build -t acrarnprod.azurecr.io/devopstrio/arn-portal:${{ github.ref_name }} ./apps/portal
+        docker push acrarnprod.azurecr.io/devopstrio/arn-portal:${{ github.ref_name }}
+
+  deploy:
+    name: 'Deploy to Prometheus AKS'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v3
+
+    - name: Azure CLI Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Update KubeConfig
+      run: az aks get-credentials --resource-group rg-arn-platform-prd --name aks-arn-platform-host-prd
+
+    - name: Helm Upgrade
+      run: |
+        helm upgrade --install arn-platform ./helm/automated-release-notes \
+        --namespace automated-release-notes-prod --create-namespace \
+        --set backend.image.tag=${{ github.ref_name }} \
+        --set portal.image.tag=${{ github.ref_name }}
